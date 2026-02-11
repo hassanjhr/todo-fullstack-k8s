@@ -1,0 +1,24 @@
+🚀 Todo Chatbot deployed successfully!
+
+Access your application:
+
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else }}
+
+  Frontend:
+    export NODE_IP=$(minikube ip)
+    echo "http://$NODE_IP:{{ .Values.frontend.service.nodePort }}"
+
+  Backend API:
+    export NODE_IP=$(minikube ip)
+    echo "http://$NODE_IP:{{ .Values.backend.service.nodePort }}"
+
+  Or use minikube service:
+    minikube service {{ include "todo-chatbot.fullname" . }}-frontend
+    minikube service {{ include "todo-chatbot.fullname" . }}-backend
+{{- end }}
