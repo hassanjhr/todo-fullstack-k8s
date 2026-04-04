@@ -2,8 +2,12 @@
 # Purpose: Load and validate environment variables for the application
 # Security: All secrets must be loaded from environment, never hardcoded
 
+import os
+import logging
 from pydantic_settings import BaseSettings
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -58,11 +62,37 @@ class Settings(BaseSettings):
     # Environment (Optional)
     ENVIRONMENT: str = "development"
 
+    # Dapr Configuration (005-advanced-features-dapr-kafka)
+    DAPR_ENABLED: bool = False
+    DAPR_HTTP_PORT: int = 3500
+    DAPR_PUBSUB_NAME: str = "taskpubsub"
+    REMINDER_POLL_INTERVAL: int = 300
+    KAFKA_BROKERS: str = "localhost:9092"
+
     class Config:
         """Pydantic configuration"""
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+
+    def get_secret(self, key: str) -> str:
+        """
+        Retrieve a secret value. When DAPR_ENABLED=true, fetches from the Dapr
+        secrets store (localsecrets component). Falls back to environment variable.
+        """
+        if self.DAPR_ENABLED:
+            try:
+                import httpx
+                url = f"http://localhost:{self.DAPR_HTTP_PORT}/v1.0/secrets/localsecrets/{key}"
+                response = httpx.get(url, timeout=5.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get(key, "")
+            except Exception as exc:
+                logger.warning(f"Dapr secret fetch failed for '{key}': {exc} — falling back to env")
+        # Fallback: environment variable (case-insensitive heuristic)
+        env_key = key.upper().replace("-", "_")
+        return os.environ.get(env_key, "")
 
     def validate_jwt_secret(self) -> None:
         """

@@ -8,8 +8,6 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import logging
-from src.api.routes.auth import router as auth_router
-from src.api.routes.tasks import router as tasks_router
 
 
 
@@ -48,6 +46,9 @@ async def lifespan(app: FastAPI):
         - Close database connection pool
         - Log application shutdown
     """
+    # Import scheduler here to avoid import-time side effects
+    from src.services.reminder_service import start_scheduler, stop_scheduler
+
     # Startup
     logger.info("Starting Todo Full-Stack Web Application")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
@@ -59,12 +60,15 @@ async def lifespan(app: FastAPI):
     # Create tables for any new models (conversations, messages)
     await init_db()
 
+    # Start reminder scheduler (polls for due reminders at REMINDER_POLL_INTERVAL seconds)
+    start_scheduler()
     logger.info("Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Shutting down application")
+    stop_scheduler()
     await close_db()
     logger.info("Database connections closed")
 
@@ -196,6 +200,19 @@ async def health_check():
 
 
 @app.get(
+    "/healthz/ready",
+    tags=["Health"],
+    summary="Readiness probe",
+    description="Dapr readiness probe endpoint. Returns 200 when the application is ready.",
+)
+async def readiness_check():
+    return {
+        "status": "ok",
+        "dapr_enabled": settings.DAPR_ENABLED,
+    }
+
+
+@app.get(
     "/",
     tags=["Root"],
     summary="API root endpoint",
@@ -222,7 +239,7 @@ async def root():
 # ============================================================================
 
 # Import authentication, task, and chat routes
-from api.routes import auth_router, tasks_router, chat_router
+from src.api.routes import auth_router, tasks_router, chat_router, tags_router, reminders_router
 
 # Register authentication routes
 # Security: Auth endpoints do NOT require JWT authentication (they issue tokens)
@@ -252,6 +269,24 @@ app.include_router(
 )
 
 logger.info("Chat routes registered at /api")
+
+# Register tags routes (T027)
+app.include_router(
+    tags_router,
+    prefix="/api",
+    tags=["Tags"]
+)
+
+logger.info("Tags routes registered at /api")
+
+# Register reminders routes (T048)
+app.include_router(
+    reminders_router,
+    prefix="/api",
+    tags=["Reminders"]
+)
+
+logger.info("Reminders routes registered at /api")
 
 
 # ============================================================================

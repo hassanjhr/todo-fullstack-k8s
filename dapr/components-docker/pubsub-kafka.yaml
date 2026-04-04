@@ -1,0 +1,25 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: taskpubsub
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+    # Internal Docker network broker address (service name)
+    - name: brokers
+      value: "kafka:29092"
+    - name: consumerGroup
+      value: "todo-chatbot"
+    - name: authRequired
+      value: "false"
+    - name: authType
+      value: "none"
+    - name: maxRetries
+      value: "3"
+    - name: maxRetryDuration
+      value: "3s"
+    - name: deadLetterTopic
+      value: "tasks-dlq"
+    - name: autoCreateTopics
+      value: "true"

@@ -55,6 +55,29 @@ async def run_migration(conn: asyncpg.Connection, migration_file: Path) -> None:
         raise
 
 
+async def ensure_migrations_table(conn: asyncpg.Connection) -> None:
+    """Create schema_migrations tracking table if it doesn't exist."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+
+
+async def get_applied_migrations(conn: asyncpg.Connection) -> set:
+    """Return set of already-applied migration filenames."""
+    rows = await conn.fetch("SELECT filename FROM schema_migrations")
+    return {r["filename"] for r in rows}
+
+
+async def mark_migration_applied(conn: asyncpg.Connection, filename: str) -> None:
+    await conn.execute(
+        "INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+        filename
+    )
+
+
 async def main():
     """Main migration runner"""
     print("Database Migration Runner")
@@ -87,9 +110,33 @@ async def main():
         sys.exit(1)
 
     try:
-        # Run migrations in order
-        for migration_file in migration_files:
+        # Ensure tracking table exists
+        await ensure_migrations_table(conn)
+        applied = await get_applied_migrations(conn)
+
+        # Seed already-known applied migrations (001, 002) if tables exist
+        existing_tables = {
+            r["table_name"]
+            for r in await conn.fetch(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            )
+        }
+        for seed_file in ["001_create_users_table.sql", "002_create_tasks_table.sql"]:
+            if "users" in existing_tables and seed_file not in applied:
+                await mark_migration_applied(conn, seed_file)
+                applied.add(seed_file)
+                print(f"  (seeded {seed_file} as already applied)")
+
+        # Run only pending migrations
+        pending = [f for f in migration_files if f.name not in applied]
+        if not pending:
+            print("\n✓ All migrations already applied — nothing to do.")
+        else:
+            print(f"\n{len(pending)} pending migration(s) to apply...")
+
+        for migration_file in pending:
             await run_migration(conn, migration_file)
+            await mark_migration_applied(conn, migration_file.name)
 
         print(f"\n{'='*60}")
         print("✓ All migrations completed successfully")

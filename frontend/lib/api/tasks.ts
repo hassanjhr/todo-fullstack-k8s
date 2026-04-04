@@ -1,17 +1,12 @@
 /**
  * Task API Client
- * Feature: 003-frontend-integration
- *
- * API functions for task CRUD operations
+ * Feature: 003-frontend-integration (extended: 005-advanced-features-dapr-kafka)
  */
 
 import { apiClient } from './client';
-import { Task, CreateTaskData, UpdateTaskData } from '@/types';
+import { Task, CreateTaskData, UpdateTaskData, TaskFilters, TaskListResponse } from '@/types';
 import { getUser } from '@/lib/auth/token';
 
-/**
- * Get user ID from stored user data
- */
 function getUserId(): string {
   const user = getUser();
   if (!user || !user.id) {
@@ -21,12 +16,34 @@ function getUserId(): string {
 }
 
 /**
- * Get all tasks for the authenticated user
+ * Build query string from TaskFilters
  */
-export async function getTasks(): Promise<Task[]> {
+function buildQueryString(filters?: TaskFilters): string {
+  if (!filters) return '';
+  const params = new URLSearchParams();
+  if (filters.q) params.set('q', filters.q);
+  if (filters.priority?.length) {
+    filters.priority.forEach((p) => params.append('priority', p));
+  }
+  if (filters.tags?.length) {
+    filters.tags.forEach((t) => params.append('tags', t));
+  }
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+  if (filters.sort_by) params.set('sort_by', filters.sort_by);
+  if (filters.sort_order) params.set('sort_order', filters.sort_order);
+  if (filters.cursor) params.set('cursor', filters.cursor);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/**
+ * Get tasks with optional filters, search, and pagination
+ */
+export async function getTasks(filters?: TaskFilters): Promise<TaskListResponse> {
   const userId = getUserId();
-  const response = await apiClient.get<{ tasks: Task[] }>(`/api/${userId}/tasks`, true);
-  return response.tasks;
+  const qs = buildQueryString(filters);
+  return apiClient.get<TaskListResponse>(`/api/${userId}/tasks${qs}`, true);
 }
 
 /**
@@ -38,37 +55,24 @@ export async function createTask(data: CreateTaskData): Promise<Task> {
 }
 
 /**
- * Update an existing task (title and/or description)
- *
- * IMPORTANT: Backend validation requires:
- * - PUT /api/{user_id}/tasks/{task_id} expects {title: string, description?: string}
- * - is_completed is NOT updatable via PUT (use PATCH /complete instead)
+ * Update an existing task (title, description, priority, tags, etc.)
  */
 export async function updateTask(id: string, data: UpdateTaskData): Promise<Task> {
   const userId = getUserId();
 
-  // If only updating completion status, use the PATCH /complete endpoint
+  // Route completion-only updates through the PATCH /complete toggle endpoint
   if ('is_completed' in data && Object.keys(data).length === 1) {
-    console.log('[Tasks API] Toggling completion via PATCH /complete');
     return toggleTaskCompletion(id);
   }
 
-  // For title/description updates, use PUT with required title field
-  console.log('[Tasks API] Updating task via PUT with data:', data);
   return apiClient.put<Task>(`/api/${userId}/tasks/${id}`, data, true);
 }
 
 /**
- * Toggle task completion status
- *
- * Uses PATCH /api/{user_id}/tasks/{task_id}/complete endpoint
- * No request body needed - backend toggles the is_completed field automatically
+ * Toggle task completion status via PATCH /complete
  */
 export async function toggleTaskCompletion(id: string): Promise<Task> {
   const userId = getUserId();
-  console.log('[Tasks API] Calling PATCH /complete for task:', id);
-
-  // PATCH to /complete endpoint - no body needed, backend toggles the status
   return apiClient.patch<Task>(`/api/${userId}/tasks/${id}/complete`, undefined, true);
 }
 

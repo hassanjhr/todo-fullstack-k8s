@@ -1,0 +1,28 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: taskpubsub
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+    # Broker addresses — override via environment or secrets store in production
+    - name: brokers
+      value: "localhost:9092"
+    - name: consumerGroup
+      value: "todo-chatbot"
+    - name: authRequired
+      value: "false"
+    - name: authType
+      value: "none"
+    # Retry policy — retries before sending to dead-letter topic
+    - name: maxRetries
+      value: "3"
+    - name: maxRetryDuration
+      value: "3s"
+    # Dead-letter topic for exhausted retries
+    - name: deadLetterTopic
+      value: "tasks-dlq"
+    # Auto-create topics on first publish
+    - name: autoCreateTopics
+      value: "true"

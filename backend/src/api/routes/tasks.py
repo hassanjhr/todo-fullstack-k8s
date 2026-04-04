@@ -1,33 +1,148 @@
-# Task API Routes (T031, T032)
-# Purpose: CRUD endpoints for task management
+# Task API Routes (Extended: 005-advanced-features-dapr-kafka)
+# Purpose: CRUD endpoints for task management with priority, tags, search, filter, sort,
+#          cursor-based pagination, and Dapr event publishing.
 # Security: JWT authentication required, user data isolation enforced
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
+from sqlalchemy import or_, and_, case, delete as sa_delete
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional, List
+import base64
+import json
 import logging
 
-# Import dependencies
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from database import get_session
 from models.user import User
 from models.task import Task
-from schemas.task import TaskCreateRequest, TaskUpdateRequest, TaskResponse, TaskListResponse
+from models.tag import Tag
+from models.task_tag import TaskTag
+from models.reminder import Reminder
+from models.recurrence_series import RecurrenceSeries
+from schemas.task import (
+    TaskCreateRequest,
+    TaskUpdateRequest,
+    TaskResponse,
+    TaskListResponse,
+    ReminderInTask,
+)
 from api.deps import get_current_user, verify_user_access
+from services import event_publisher
 
-# Configure logging
 logger = logging.getLogger(__name__)
-
-# Create router for task endpoints
 router = APIRouter()
 
 
 # ============================================================================
-# GET /api/{user_id}/tasks - Retrieve User's Tasks (T031)
+# Cursor helpers (T037)
+# ============================================================================
+
+def encode_cursor(created_at: datetime, task_id: UUID) -> str:
+    payload = {"created_at": created_at.isoformat(), "id": str(task_id)}
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+
+def decode_cursor(cursor_str: str) -> tuple[datetime, UUID]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor_str.encode()).decode()
+        payload = json.loads(raw)
+        return datetime.fromisoformat(payload["created_at"]), UUID(payload["id"])
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid pagination cursor",
+        )
+
+
+# ============================================================================
+# Internal helpers
+# ============================================================================
+
+async def _get_or_create_tag(name: str, user_id: UUID, session: AsyncSession) -> Tag:
+    """Upsert a tag by name for a given user. Flushes but does not commit."""
+    stmt = select(Tag).where(Tag.user_id == user_id, Tag.name == name)
+    result = await session.execute(stmt)
+    tag = result.scalar_one_or_none()
+    if tag is None:
+        tag = Tag(user_id=user_id, name=name, created_at=datetime.utcnow())
+        session.add(tag)
+        await session.flush()
+    return tag
+
+
+async def _sync_task_tags(
+    task_id: UUID, tag_names: List[str], user_id: UUID, session: AsyncSession
+) -> None:
+    """
+    Replace all TaskTag rows for a task with rows derived from tag_names.
+    Creates missing Tag records via _get_or_create_tag.
+    """
+    # Delete existing associations
+    del_stmt = sa_delete(TaskTag).where(TaskTag.task_id == task_id)
+    await session.execute(del_stmt)
+
+    # Re-create from new tag list
+    for name in tag_names:
+        tag = await _get_or_create_tag(name, user_id, session)
+        session.add(TaskTag(task_id=task_id, tag_id=tag.id))
+
+
+async def _batch_load_tags(task_ids: List[UUID], session: AsyncSession) -> dict[UUID, List[str]]:
+    """Fetch tag names for a list of task IDs in one query. Returns {task_id: [tag_names]}."""
+    if not task_ids:
+        return {}
+    stmt = (
+        select(TaskTag.task_id, Tag.name)
+        .join(Tag, Tag.id == TaskTag.tag_id)
+        .where(TaskTag.task_id.in_(task_ids))
+    )
+    result = await session.execute(stmt)
+    tags_by_task: dict[UUID, List[str]] = {}
+    for task_id, tag_name in result.all():
+        tags_by_task.setdefault(task_id, []).append(tag_name)
+    return tags_by_task
+
+
+def _to_task_response(task: Task, tag_names: List[str]) -> TaskResponse:
+    """Convert a Task ORM object + resolved tag names into a TaskResponse."""
+    now = datetime.now(timezone.utc)
+    # task.due_date from DB (TIMESTAMPTZ) is tz-aware; compare against tz-aware now
+    due = task.due_date
+    if due is not None and due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    is_overdue = (
+        due is not None
+        and due < now
+        and not task.is_completed
+    )
+    return TaskResponse(
+        id=task.id,
+        user_id=task.user_id,
+        title=task.title,
+        description=task.description,
+        is_completed=task.is_completed,
+        priority=task.priority,
+        tags=tag_names,
+        due_date=task.due_date,
+        is_overdue=is_overdue,
+        recurrence_rule=task.recurrence_rule,
+        series_id=task.series_id,
+        is_paused=task.is_paused,
+        next_due_date=None,   # Populated in Phase 6 (recurring tasks)
+        reminders=[],          # Populated in Phase 5 (reminders)
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+    )
+
+
+# ============================================================================
+# GET /api/{user_id}/tasks — List tasks with filters, sort, cursor pagination
+# (T025, T036, T037)
 # ============================================================================
 
 @router.get(
@@ -35,108 +150,113 @@ router = APIRouter()
     response_model=TaskListResponse,
     status_code=status.HTTP_200_OK,
     summary="Get user's tasks",
-    description="Retrieve all tasks belonging to the authenticated user, sorted by creation date (newest first)",
-    responses={
-        200: {
-            "description": "Tasks retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "tasks": [
-                            {
-                                "id": "660e8400-e29b-41d4-a716-446655440001",
-                                "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                                "title": "Buy groceries",
-                                "description": "Milk, eggs, bread",
-                                "is_completed": False,
-                                "created_at": "2026-02-06T12:00:00.000Z",
-                                "updated_at": "2026-02-06T12:00:00.000Z"
-                            }
-                        ]
-                    }
-                }
-            }
-        },
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"}
-    }
+    description=(
+        "Retrieve tasks with optional full-text search, priority/tag/status filters, "
+        "sort control, and cursor-based pagination."
+    ),
 )
 async def get_tasks(
     user_id: UUID,
+    q: Optional[str] = Query(default=None, description="Full-text search on title and description"),
+    priority: Optional[List[str]] = Query(default=None, description="Filter by priority (high|medium|low)"),
+    tags: Optional[List[str]] = Query(default=None, description="Filter by tag names (AND logic)"),
+    task_status: str = Query(default="all", alias="status", description="all|completed|pending|overdue"),
+    sort_by: str = Query(default="created_at", description="created_at|priority|title|due_date"),
+    sort_order: str = Query(default="desc", description="asc|desc"),
+    cursor: Optional[str] = Query(default=None, description="Opaque pagination cursor"),
+    limit: int = Query(default=20, ge=1, le=100, description="Page size (max 100)"),
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> TaskListResponse:
-    """
-    Retrieve all tasks belonging to the authenticated user.
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Query tasks filtered by authenticated user_id
-        4. Return tasks sorted by created_at DESC (newest first)
-
-    Args:
-        user_id: User ID from URL path parameter
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        TaskListResponse: List of tasks belonging to authenticated user
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-
-    Security:
-        - ALL tasks filtered by authenticated user_id from JWT token
-        - user_id in URL must match authenticated user (prevents cross-user access)
-        - No pagination limit (acceptable for MVP; add pagination in production)
-
-    Example Request:
-        GET /api/550e8400-e29b-41d4-a716-446655440000/tasks
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-    Example Response (200 OK):
-        {
-            "tasks": [
-                {
-                    "id": "660e8400-e29b-41d4-a716-446655440001",
-                    "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                    "title": "Buy groceries",
-                    "description": "Milk, eggs, bread",
-                    "is_completed": false,
-                    "created_at": "2026-02-06T12:00:00Z",
-                    "updated_at": "2026-02-06T12:00:00Z"
-                }
-            ]
-        }
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Retrieving tasks for user {current_user.id}")
+    stmt = select(Task).where(Task.user_id == current_user.id)
 
-    # Query tasks filtered by authenticated user_id
-    # Security: CRITICAL - Filter by current_user.id from JWT token, NOT user_id from URL
-    statement = (
-        select(Task)
-        .where(Task.user_id == current_user.id)
-        .order_by(Task.created_at.desc())  # Newest first
+    # --- Full-text search ---
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(Task.title.ilike(term), Task.description.ilike(term))
+        )
+
+    # --- Priority filter ---
+    if priority:
+        valid = [p for p in priority if p in ("high", "medium", "low")]
+        if valid:
+            stmt = stmt.where(Task.priority.in_(valid))
+
+    # --- Tag filter (AND logic: task must have ALL requested tags) ---
+    if tags:
+        for tag_name in tags:
+            tag_subq = (
+                select(TaskTag.task_id)
+                .join(Tag, Tag.id == TaskTag.tag_id)
+                .where(Tag.name == tag_name, Tag.user_id == current_user.id)
+                .scalar_subquery()
+            )
+            stmt = stmt.where(Task.id.in_(tag_subq))
+
+    # --- Status filter ---
+    now = datetime.now(timezone.utc)
+    if task_status == "completed":
+        stmt = stmt.where(Task.is_completed == True)  # noqa: E712
+    elif task_status == "pending":
+        stmt = stmt.where(Task.is_completed == False)  # noqa: E712
+    elif task_status == "overdue":
+        stmt = stmt.where(Task.is_completed == False, Task.due_date < now)  # noqa: E712
+
+    # --- Cursor (always anchored to (created_at, id)) ---
+    if cursor:
+        cur_created_at, cur_id = decode_cursor(cursor)
+        stmt = stmt.where(
+            or_(
+                Task.created_at < cur_created_at,
+                and_(Task.created_at == cur_created_at, Task.id < cur_id),
+            )
+        )
+
+    # --- Sort ---
+    priority_rank = case(
+        (Task.priority == "high", 1),
+        (Task.priority == "medium", 2),
+        (Task.priority == "low", 3),
+        else_=4,
     )
+    asc_flag = sort_order.lower() == "asc"
 
-    result = await session.execute(statement)
-    tasks = result.scalars().all()
+    if sort_by == "priority":
+        primary_order = priority_rank if asc_flag else priority_rank.desc()
+    elif sort_by == "title":
+        primary_order = Task.title.asc() if asc_flag else Task.title.desc()
+    elif sort_by == "due_date":
+        primary_order = Task.due_date.asc() if asc_flag else Task.due_date.desc()
+    else:  # created_at (default)
+        primary_order = Task.created_at.asc() if asc_flag else Task.created_at.desc()
 
-    logger.info(f"Retrieved {len(tasks)} tasks for user {current_user.id}")
+    # Always add (created_at DESC, id DESC) as tie-breaker for stable cursor pagination
+    stmt = stmt.order_by(primary_order, Task.created_at.desc(), Task.id.desc())
+    stmt = stmt.limit(limit + 1)
 
-    # Convert SQLModel objects to Pydantic response models
-    task_responses = [TaskResponse.model_validate(task) for task in tasks]
+    result = await session.execute(stmt)
+    tasks = list(result.scalars().all())
 
-    return TaskListResponse(tasks=task_responses)
+    has_more = len(tasks) > limit
+    if has_more:
+        tasks = tasks[:limit]
+
+    next_cursor: Optional[str] = None
+    if has_more and tasks:
+        last = tasks[-1]
+        next_cursor = encode_cursor(last.created_at, last.id)
+
+    tags_by_task = await _batch_load_tags([t.id for t in tasks], session)
+    task_responses = [_to_task_response(t, tags_by_task.get(t.id, [])) for t in tasks]
+
+    return TaskListResponse(tasks=task_responses, next_cursor=next_cursor, has_more=has_more)
 
 
 # ============================================================================
-# GET /api/{user_id}/tasks/{task_id} - Get Single Task (T049)
+# GET /api/{user_id}/tasks/{task_id} — Get single task
 # ============================================================================
 
 @router.get(
@@ -144,111 +264,28 @@ async def get_tasks(
     response_model=TaskResponse,
     status_code=status.HTTP_200_OK,
     summary="Get single task",
-    description="Retrieve full details of a single task (authenticated user must own the task)",
-    responses={
-        200: {
-            "description": "Task retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": "660e8400-e29b-41d4-a716-446655440001",
-                        "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "title": "Buy groceries",
-                        "description": "Milk, eggs, bread",
-                        "is_completed": False,
-                        "created_at": "2026-02-06T12:00:00.000Z",
-                        "updated_at": "2026-02-06T12:00:00.000Z"
-                    }
-                }
-            }
-        },
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"},
-        404: {"description": "Not Found - Task does not exist or does not belong to user"}
-    }
 )
 async def get_single_task(
     user_id: UUID,
     task_id: UUID,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> TaskResponse:
-    """
-    Retrieve full details of a single task.
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Query task by task_id with ownership filter (Task.user_id == current_user.id)
-        4. Return 404 if task not found (prevents task enumeration attacks)
-        5. Return complete task object with all fields
-
-    Args:
-        user_id: User ID from URL path parameter
-        task_id: Task ID from URL path parameter
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        TaskResponse: Complete task object with all fields
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-        HTTPException 404: If task not found or does not belong to authenticated user
-
-    Security:
-        - Task ownership verified via JWT token AND database query
-        - user_id in URL must match authenticated user (prevents cross-user access)
-        - Task query filtered by current_user.id (prevents viewing other users' tasks)
-        - Returns 404 for non-existent tasks (prevents enumeration of task IDs)
-
-    Example Request:
-        GET /api/550e8400-e29b-41d4-a716-446655440000/tasks/660e8400-e29b-41d4-a716-446655440001
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-    Example Response (200 OK):
-        {
-            "id": "660e8400-e29b-41d4-a716-446655440001",
-            "user_id": "550e8400-e29b-41d4-a716-446655440000",
-            "title": "Buy groceries",
-            "description": "Milk, eggs, bread",
-            "is_completed": false,
-            "created_at": "2026-02-06T12:00:00Z",
-            "updated_at": "2026-02-06T12:00:00Z"
-        }
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Retrieving task {task_id} for user {current_user.id}")
-
-    # Query task with ownership verification
-    # Security: CRITICAL - Filter by both task_id AND current_user.id to ensure ownership
-    statement = select(Task).where(
-        Task.id == task_id,
-        Task.user_id == current_user.id  # Ownership check
-    )
-
-    result = await session.execute(statement)
+    stmt = select(Task).where(Task.id == task_id, Task.user_id == current_user.id)
+    result = await session.execute(stmt)
     task = result.scalar_one_or_none()
 
-    # Return 404 if task not found (don't reveal if task exists for other users)
-    if not task:
-        logger.warning(f"Task {task_id} not found or does not belong to user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found"
-        )
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    logger.info(f"Task {task_id} retrieved successfully for user {current_user.id}")
-
-    # Convert SQLModel object to Pydantic response model
-    return TaskResponse.model_validate(task)
+    tags_by_task = await _batch_load_tags([task.id], session)
+    return _to_task_response(task, tags_by_task.get(task.id, []))
 
 
 # ============================================================================
-# POST /api/{user_id}/tasks - Create New Task (T032)
+# POST /api/{user_id}/tasks — Create task (T024)
 # ============================================================================
 
 @router.post(
@@ -256,121 +293,89 @@ async def get_single_task(
     response_model=TaskResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create new task",
-    description="Create a new task for the authenticated user",
-    responses={
-        201: {
-            "description": "Task created successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": "660e8400-e29b-41d4-a716-446655440001",
-                        "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "title": "Buy groceries",
-                        "description": "Milk, eggs, bread",
-                        "is_completed": False,
-                        "created_at": "2026-02-06T12:00:00.000Z",
-                        "updated_at": "2026-02-06T12:00:00.000Z"
-                    }
-                }
-            }
-        },
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"},
-        422: {"description": "Validation error - Invalid request body"}
-    }
 )
 async def create_task(
     user_id: UUID,
     task_data: TaskCreateRequest,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> TaskResponse:
-    """
-    Create a new task for the authenticated user.
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Validate request body (title required, max lengths enforced)
-        4. Create task with authenticated user_id from JWT token
-        5. Set is_completed to False by default
-        6. Save to database and return created task
-
-    Args:
-        user_id: User ID from URL path parameter
-        task_data: Task creation request (title, optional description)
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        TaskResponse: Created task with generated ID and timestamps
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-        HTTPException 422: If validation fails (empty title, too long, etc.)
-
-    Security:
-        - Task ownership determined by JWT token, NOT request body
-        - user_id assigned from current_user.id (authenticated user)
-        - user_id in URL must match authenticated user (prevents creating tasks for others)
-        - is_completed defaults to False (not user-controllable on creation)
-
-    Validation:
-        - title: Required, non-empty, max 200 characters
-        - description: Optional, max 2000 characters if provided
-
-    Example Request:
-        POST /api/550e8400-e29b-41d4-a716-446655440000/tasks
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-        Content-Type: application/json
-
-        {
-            "title": "Buy groceries",
-            "description": "Milk, eggs, bread"
-        }
-
-    Example Response (201 Created):
-        {
-            "id": "660e8400-e29b-41d4-a716-446655440001",
-            "user_id": "550e8400-e29b-41d4-a716-446655440000",
-            "title": "Buy groceries",
-            "description": "Milk, eggs, bread",
-            "is_completed": false,
-            "created_at": "2026-02-06T12:00:00Z",
-            "updated_at": "2026-02-06T12:00:00Z"
-        }
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Creating task for user {current_user.id}: {task_data.title}")
+    # Validate RRULE if provided (T059)
+    if task_data.recurrence_rule:
+        try:
+            from dateutil.rrule import rrulestr
+            rrulestr(task_data.recurrence_rule, dtstart=datetime.utcnow())
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid recurrence_rule: must be a valid RFC 5545 RRULE string",
+            )
 
-    # Create task with authenticated user_id from JWT token
-    # Security: CRITICAL - Use current_user.id from JWT, NOT user_id from URL or request body
     now = datetime.utcnow()
+    # Normalize due_date to UTC-naive (DB column is TIMESTAMP WITHOUT TIME ZONE)
+    due_date_naive = task_data.due_date.replace(tzinfo=None) if task_data.due_date else None
     new_task = Task(
-        user_id=current_user.id,  # From JWT token, not request
+        user_id=current_user.id,
         title=task_data.title,
         description=task_data.description,
-        is_completed=False,  # Default to incomplete
+        is_completed=False,
+        priority=task_data.priority,
+        due_date=due_date_naive,
+        recurrence_rule=task_data.recurrence_rule,
         created_at=now,
-        updated_at=now
+        updated_at=now,
     )
-
-    # Save to database
     session.add(new_task)
+    await session.flush()  # Assigns new_task.id without committing
+
+    # Create RecurrenceSeries if recurrence_rule provided (T059)
+    if task_data.recurrence_rule:
+        series = RecurrenceSeries(
+            user_id=current_user.id,
+            original_task_id=new_task.id,
+            recurrence_rule=task_data.recurrence_rule,
+            base_title=task_data.title,
+            base_description=task_data.description,
+            base_priority=task_data.priority,
+            is_active=True,
+            created_at=now,
+        )
+        session.add(series)
+        await session.flush()
+        new_task.series_id = series.id
+        session.add(new_task)
+
+    # Create tag associations
+    resolved_tags: List[str] = []
+    for tag_name in task_data.tags:
+        tag = await _get_or_create_tag(tag_name, current_user.id, session)
+        session.add(TaskTag(task_id=new_task.id, tag_id=tag.id))
+        resolved_tags.append(tag_name)
+
     await session.commit()
     await session.refresh(new_task)
 
-    logger.info(f"Task created successfully: {new_task.id} for user {current_user.id}")
+    logger.info(f"Task {new_task.id} created for user {current_user.id}")
 
-    # Convert SQLModel object to Pydantic response model
-    return TaskResponse.model_validate(new_task)
+    # Publish event (non-blocking, graceful degradation)
+    event_publisher.publish_task_event(
+        "task.created",
+        {
+            "task_id": str(new_task.id),
+            "user_id": str(current_user.id),
+            "title": new_task.title,
+            "priority": new_task.priority,
+            "tags": resolved_tags,
+        },
+    )
+
+    return _to_task_response(new_task, resolved_tags)
 
 
 # ============================================================================
-# PUT /api/{user_id}/tasks/{task_id} - Update Task (T040)
+# PUT /api/{user_id}/tasks/{task_id} — Update task fields
 # ============================================================================
 
 @router.put(
@@ -378,233 +383,183 @@ async def create_task(
     response_model=TaskResponse,
     status_code=status.HTTP_200_OK,
     summary="Update task",
-    description="Update an existing task's title and description (authenticated user must own the task)",
-    responses={
-        200: {
-            "description": "Task updated successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": "660e8400-e29b-41d4-a716-446655440001",
-                        "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "title": "Buy groceries and household items",
-                        "description": "Milk, eggs, bread, cleaning supplies",
-                        "is_completed": False,
-                        "created_at": "2026-02-06T12:00:00.000Z",
-                        "updated_at": "2026-02-07T10:30:00.000Z"
-                    }
-                }
-            }
-        },
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"},
-        404: {"description": "Not Found - Task does not exist or does not belong to user"},
-        422: {"description": "Validation error - Invalid request body"}
-    }
 )
 async def update_task(
     user_id: UUID,
     task_id: UUID,
     task_data: TaskUpdateRequest,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> TaskResponse:
-    """
-    Update an existing task's title and description.
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Query task by task_id with ownership filter (Task.user_id == current_user.id)
-        4. Return 404 if task not found (prevents task enumeration attacks)
-        5. Validate request body (title required, max lengths enforced)
-        6. Update title and description fields
-        7. Update updated_at timestamp automatically
-        8. Save to database and return updated task
-
-    Args:
-        user_id: User ID from URL path parameter
-        task_id: Task ID from URL path parameter
-        task_data: Task update request (title, optional description)
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        TaskResponse: Updated task with new values and updated timestamp
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-        HTTPException 404: If task not found or does not belong to authenticated user
-        HTTPException 422: If validation fails (empty title, too long, etc.)
-
-    Security:
-        - Task ownership verified via JWT token AND database query
-        - user_id in URL must match authenticated user (prevents cross-user access)
-        - Task query filtered by current_user.id (prevents updating other users' tasks)
-        - Returns 404 for non-existent tasks (prevents enumeration of task IDs)
-        - is_completed NOT updatable via this endpoint (use PATCH /complete)
-
-    Validation:
-        - title: Required, non-empty, max 200 characters
-        - description: Optional, max 2000 characters if provided
-
-    Example Request:
-        PUT /api/550e8400-e29b-41d4-a716-446655440000/tasks/660e8400-e29b-41d4-a716-446655440001
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-        Content-Type: application/json
-
-        {
-            "title": "Buy groceries and household items",
-            "description": "Milk, eggs, bread, cleaning supplies"
-        }
-
-    Example Response (200 OK):
-        {
-            "id": "660e8400-e29b-41d4-a716-446655440001",
-            "user_id": "550e8400-e29b-41d4-a716-446655440000",
-            "title": "Buy groceries and household items",
-            "description": "Milk, eggs, bread, cleaning supplies",
-            "is_completed": false,
-            "created_at": "2026-02-06T12:00:00Z",
-            "updated_at": "2026-02-07T10:30:00Z"
-        }
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Updating task {task_id} for user {current_user.id}")
-
-    # Query task with ownership verification
-    # Security: CRITICAL - Filter by both task_id AND current_user.id to ensure ownership
-    statement = select(Task).where(
-        Task.id == task_id,
-        Task.user_id == current_user.id  # Ownership check
-    )
-
-    result = await session.execute(statement)
+    stmt = select(Task).where(Task.id == task_id, Task.user_id == current_user.id)
+    result = await session.execute(stmt)
     task = result.scalar_one_or_none()
 
-    # Return 404 if task not found (don't reveal if task exists for other users)
-    if not task:
-        logger.warning(f"Task {task_id} not found or does not belong to user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found"
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    # Apply updates (only non-None values)
+    if task_data.title is not None:
+        task.title = task_data.title
+    if task_data.description is not None:
+        task.description = task_data.description
+    if task_data.is_completed is not None:
+        task.is_completed = task_data.is_completed
+    if task_data.priority is not None:
+        task.priority = task_data.priority
+    if task_data.due_date is not None:
+        task.due_date = task_data.due_date.replace(tzinfo=None)
+    if task_data.recurrence_rule is not None:
+        task.recurrence_rule = task_data.recurrence_rule
+    if task_data.is_paused is not None:
+        task.is_paused = task_data.is_paused
+    task.updated_at = datetime.utcnow()
+
+    # When marking complete, cancel all pending reminders (T046)
+    if task_data.is_completed is True:
+        cancel_stmt = select(Reminder).where(
+            Reminder.task_id == task.id,
+            Reminder.status == "pending",
         )
+        cancel_result = await session.execute(cancel_stmt)
+        for r in cancel_result.scalars().all():
+            r.status = "cancelled"
+            session.add(r)
 
-    # Update task fields
-    task.title = task_data.title
-    task.description = task_data.description
-    task.updated_at = datetime.utcnow()  # Update timestamp
+    # When due_date changes, recalculate trigger_at for pending reminders (T046)
+    if task_data.due_date is not None and task_data.due_date.replace(tzinfo=None) != task.due_date:
+        new_due = task_data.due_date.replace(tzinfo=None)
+        recalc_stmt = select(Reminder).where(
+            Reminder.task_id == task.id,
+            Reminder.status == "pending",
+        )
+        recalc_result = await session.execute(recalc_stmt)
+        from datetime import timedelta
+        for r in recalc_result.scalars().all():
+            r.trigger_at = new_due - timedelta(minutes=r.offset_minutes)
+            session.add(r)
 
-    # Save changes to database
+    # Sync tags if provided (T026)
+    resolved_tags: Optional[List[str]] = None
+    if task_data.tags is not None:
+        await _sync_task_tags(task.id, task_data.tags, current_user.id, session)
+        resolved_tags = task_data.tags
+
     session.add(task)
     await session.commit()
     await session.refresh(task)
 
-    logger.info(f"Task {task_id} updated successfully for user {current_user.id}")
+    # Spawn next recurrence on completion (T060)
+    if task_data.is_completed is True and task.recurrence_rule and not task.is_paused:
+        from services import task_service
+        # Need a new session state after commit
+        new_instance = await task_service.spawn_next_recurrence(task, session)
+        if new_instance:
+            await session.commit()
 
-    # Convert SQLModel object to Pydantic response model
-    return TaskResponse.model_validate(task)
+    # Handle bulk update for "all future" scope (T060)
+    elif task_data.update_scope == "all_future" and task.series_id:
+        from services import task_service
+        changed_fields = {
+            k: v for k, v in task_data.model_dump(exclude_unset=True).items()
+            if k not in ("update_scope", "tags") and v is not None
+        }
+        await task_service.handle_bulk_update(
+            str(task.series_id), changed_fields, str(task_id), session
+        )
+        await session.commit()
+
+    # Handle is_paused toggling RecurrenceSeries active state (T060)
+    if task_data.is_paused is not None and task.series_id:
+        series_stmt = select(RecurrenceSeries).where(RecurrenceSeries.id == task.series_id)
+        series_result = await session.execute(series_stmt)
+        series = series_result.scalar_one_or_none()
+        if series:
+            series.is_active = not task_data.is_paused
+            session.add(series)
+            await session.commit()
+
+    # Load current tags for response if we didn't replace them
+    if resolved_tags is None:
+        tags_by_task = await _batch_load_tags([task.id], session)
+        resolved_tags = tags_by_task.get(task.id, [])
+
+    logger.info(f"Task {task_id} updated for user {current_user.id}")
+
+    event_publisher.publish_task_event(
+        "task.updated",
+        {
+            "task_id": str(task.id),
+            "user_id": str(current_user.id),
+            "title": task.title,
+            "priority": task.priority,
+        },
+    )
+
+    return _to_task_response(task, resolved_tags)
 
 
 # ============================================================================
-# DELETE /api/{user_id}/tasks/{task_id} - Delete Task (T041)
+# DELETE /api/{user_id}/tasks/{task_id} — Delete task
 # ============================================================================
 
 @router.delete(
     "/{user_id}/tasks/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete task",
-    description="Permanently delete a task (authenticated user must own the task)",
-    responses={
-        204: {"description": "Task deleted successfully (no response body)"},
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"},
-        404: {"description": "Not Found - Task does not exist or does not belong to user"}
-    }
 )
 async def delete_task(
     user_id: UUID,
     task_id: UUID,
+    delete_scope: str = Query(default="this_only", description="this_only|all_future"),
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> None:
-    """
-    Permanently delete a task.
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Query task by task_id with ownership filter (Task.user_id == current_user.id)
-        4. Return 404 if task not found (prevents task enumeration attacks)
-        5. Delete task from database (permanent deletion)
-        6. Return 204 No Content status (no response body)
-
-    Args:
-        user_id: User ID from URL path parameter
-        task_id: Task ID from URL path parameter
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        None: 204 No Content status with no response body
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-        HTTPException 404: If task not found or does not belong to authenticated user
-
-    Security:
-        - Task ownership verified via JWT token AND database query
-        - user_id in URL must match authenticated user (prevents cross-user access)
-        - Task query filtered by current_user.id (prevents deleting other users' tasks)
-        - Returns 404 for non-existent tasks (prevents enumeration of task IDs)
-        - Deletion is permanent (no soft delete in MVP)
-
-    Example Request:
-        DELETE /api/550e8400-e29b-41d4-a716-446655440000/tasks/660e8400-e29b-41d4-a716-446655440001
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-    Example Response (204 No Content):
-        (No response body)
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Deleting task {task_id} for user {current_user.id}")
-
-    # Query task with ownership verification
-    # Security: CRITICAL - Filter by both task_id AND current_user.id to ensure ownership
-    statement = select(Task).where(
-        Task.id == task_id,
-        Task.user_id == current_user.id  # Ownership check
-    )
-
-    result = await session.execute(statement)
+    stmt = select(Task).where(Task.id == task_id, Task.user_id == current_user.id)
+    result = await session.execute(stmt)
     task = result.scalar_one_or_none()
 
-    # Return 404 if task not found (don't reveal if task exists for other users)
-    if not task:
-        logger.warning(f"Task {task_id} not found or does not belong to user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found"
-        )
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    # Delete task from database (permanent deletion)
+    # Handle all_future bulk delete (T061)
+    if delete_scope == "all_future" and task.series_id:
+        from services import task_service
+        await task_service.handle_bulk_delete(str(task.series_id), str(task_id), session)
+        await session.commit()
+        event_publisher.publish_task_event(
+            "task.deleted",
+            {"task_id": str(task_id), "user_id": str(current_user.id), "scope": "all_future"},
+        )
+        return None
+
+    # Cancel pending reminders before delete (T081)
+    cancel_stmt = select(Reminder).where(
+        Reminder.task_id == task.id,
+        Reminder.status == "pending",
+    )
+    cancel_result = await session.execute(cancel_stmt)
+    for r in cancel_result.scalars().all():
+        r.status = "cancelled"
+        session.add(r)
+
     await session.delete(task)
     await session.commit()
 
-    logger.info(f"Task {task_id} deleted successfully for user {current_user.id}")
-
-    # Return 204 No Content (no response body)
+    event_publisher.publish_task_event(
+        "task.deleted",
+        {"task_id": str(task_id), "user_id": str(current_user.id)},
+    )
+    logger.info(f"Task {task_id} deleted for user {current_user.id}")
     return None
 
 
 # ============================================================================
-# PATCH /api/{user_id}/tasks/{task_id}/complete - Toggle Task Completion (T045)
+# PATCH /api/{user_id}/tasks/{task_id}/complete — Toggle completion
 # ============================================================================
 
 @router.patch(
@@ -612,120 +567,36 @@ async def delete_task(
     response_model=TaskResponse,
     status_code=status.HTTP_200_OK,
     summary="Toggle task completion",
-    description="Toggle the completion status of a task (complete ↔ incomplete)",
-    responses={
-        200: {
-            "description": "Task completion status toggled successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": "660e8400-e29b-41d4-a716-446655440001",
-                        "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "title": "Buy groceries",
-                        "description": "Milk, eggs, bread",
-                        "is_completed": True,
-                        "created_at": "2026-02-06T12:00:00.000Z",
-                        "updated_at": "2026-02-07T10:30:00.000Z"
-                    }
-                }
-            }
-        },
-        401: {"description": "Unauthorized - Invalid or missing JWT token"},
-        403: {"description": "Forbidden - user_id does not match authenticated user"},
-        404: {"description": "Not Found - Task does not exist or does not belong to user"}
-    }
 )
 async def toggle_task_completion(
     user_id: UUID,
     task_id: UUID,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ) -> TaskResponse:
-    """
-    Toggle the completion status of a task (complete ↔ incomplete).
-
-    Security Flow:
-        1. Extract and verify JWT token (via get_current_user dependency)
-        2. Verify user_id in URL matches authenticated user's ID
-        3. Query task by task_id with ownership filter (Task.user_id == current_user.id)
-        4. Return 404 if task not found (prevents task enumeration attacks)
-        5. Toggle is_completed field (True → False, False → True)
-        6. Update updated_at timestamp automatically
-        7. Save to database and return updated task
-
-    Args:
-        user_id: User ID from URL path parameter
-        task_id: Task ID from URL path parameter
-        current_user: Authenticated user from JWT token
-        session: Database session for queries
-
-    Returns:
-        TaskResponse: Updated task with toggled completion status
-
-    Raises:
-        HTTPException 401: If JWT token is invalid or missing
-        HTTPException 403: If user_id does not match authenticated user
-        HTTPException 404: If task not found or does not belong to authenticated user
-
-    Security:
-        - Task ownership verified via JWT token AND database query
-        - user_id in URL must match authenticated user (prevents cross-user access)
-        - Task query filtered by current_user.id (prevents toggling other users' tasks)
-        - Returns 404 for non-existent tasks (prevents enumeration of task IDs)
-
-    Toggle Logic:
-        - If is_completed is True, set to False
-        - If is_completed is False, set to True
-        - Simple boolean negation: task.is_completed = not task.is_completed
-
-    Example Request:
-        PATCH /api/550e8400-e29b-41d4-a716-446655440000/tasks/660e8400-e29b-41d4-a716-446655440001/complete
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-    Example Response (200 OK):
-        {
-            "id": "660e8400-e29b-41d4-a716-446655440001",
-            "user_id": "550e8400-e29b-41d4-a716-446655440000",
-            "title": "Buy groceries",
-            "description": "Milk, eggs, bread",
-            "is_completed": true,
-            "created_at": "2026-02-06T12:00:00Z",
-            "updated_at": "2026-02-07T10:30:00Z"
-        }
-    """
-    # Verify user_id in URL matches authenticated user (403 if mismatch)
     verify_user_access(user_id, current_user)
 
-    logger.info(f"Toggling completion status for task {task_id} for user {current_user.id}")
-
-    # Query task with ownership verification
-    # Security: CRITICAL - Filter by both task_id AND current_user.id to ensure ownership
-    statement = select(Task).where(
-        Task.id == task_id,
-        Task.user_id == current_user.id  # Ownership check
-    )
-
-    result = await session.execute(statement)
+    stmt = select(Task).where(Task.id == task_id, Task.user_id == current_user.id)
+    result = await session.execute(stmt)
     task = result.scalar_one_or_none()
 
-    # Return 404 if task not found (don't reveal if task exists for other users)
-    if not task:
-        logger.warning(f"Task {task_id} not found or does not belong to user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found"
-        )
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    # Toggle completion status (True → False, False → True)
     task.is_completed = not task.is_completed
-    task.updated_at = datetime.utcnow()  # Update timestamp
+    task.updated_at = datetime.utcnow()
 
-    # Save changes to database
     session.add(task)
     await session.commit()
     await session.refresh(task)
 
-    logger.info(f"Task {task_id} completion toggled to {task.is_completed} for user {current_user.id}")
+    tags_by_task = await _batch_load_tags([task.id], session)
 
-    # Convert SQLModel object to Pydantic response model
-    return TaskResponse.model_validate(task)
+    event_type = "task.completed" if task.is_completed else "task.reopened"
+    event_publisher.publish_task_event(
+        event_type,
+        {"task_id": str(task.id), "user_id": str(current_user.id)},
+    )
+
+    logger.info(f"Task {task_id} completion toggled to {task.is_completed}")
+    return _to_task_response(task, tags_by_task.get(task.id, []))

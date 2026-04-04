@@ -1,23 +1,52 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, KeyboardEvent } from 'react';
 import { TaskFormData } from '@/types';
 import { validateTaskForm } from '@/lib/utils/validation';
+import RecurrenceForm from './RecurrenceForm';
 
 /**
  * TaskForm Component
- * Form for creating new tasks
+ * Form for creating new tasks with priority and tags support
  */
 interface TaskFormProps {
-  onSubmit: (data: TaskFormData) => Promise<void>;
+  onSubmit: (data: TaskFormData & { priority: string; tags: string[] }) => Promise<void>;
   loading?: boolean;
   error?: string | null;
 }
 
+const TAG_REGEX = /^[a-zA-Z0-9-]+$/;
+
 export default function TaskForm({ onSubmit, loading = false, error = null }: TaskFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  const [tagInput, setTagInput] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [dueDate, setDueDate] = useState('');
+  const [recurrenceRule, setRecurrenceRule] = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  const addTag = (raw: string) => {
+    const name = raw.trim().toLowerCase();
+    if (name && TAG_REGEX.test(name) && name.length <= 50 && !tags.includes(name)) {
+      setTags((prev) => [...prev, name]);
+    }
+    setTagInput('');
+  };
+
+  const handleTagKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addTag(tagInput);
+    } else if (e.key === 'Backspace' && tagInput === '' && tags.length > 0) {
+      setTags((prev) => prev.slice(0, -1));
+    }
+  };
+
+  const removeTag = (name: string) => {
+    setTags((prev) => prev.filter((t) => t !== name));
+  };
 
   const handleTitleChange = (value: string) => {
     setTitle(value);
@@ -63,10 +92,21 @@ export default function TaskForm({ onSubmit, loading = false, error = null }: Ta
 
     // Submit form
     try {
-      await onSubmit(formData);
+      await onSubmit({
+        ...formData,
+        priority,
+        tags,
+        due_date: dueDate ? new Date(dueDate).toISOString() : undefined,
+        recurrence_rule: recurrenceRule || undefined,
+      });
       // Clear form on success
       setTitle('');
       setDescription('');
+      setPriority('medium');
+      setTags([]);
+      setTagInput('');
+      setDueDate('');
+      setRecurrenceRule('');
       setValidationErrors({});
     } catch (err) {
       // Error handling is done by parent component
@@ -135,6 +175,76 @@ export default function TaskForm({ onSubmit, loading = false, error = null }: Ta
           </p>
         )}
       </div>
+
+      {/* Due Date Field */}
+      <div>
+        <label htmlFor="due_date" className="block text-sm font-medium text-gray-700 mb-1">
+          Due Date <span className="text-gray-500 text-xs">(optional)</span>
+        </label>
+        <input
+          id="due_date"
+          type="datetime-local"
+          value={dueDate}
+          onChange={(e) => setDueDate(e.target.value)}
+          disabled={loading}
+          className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-black"
+        />
+      </div>
+
+      {/* Priority Field */}
+      <div>
+        <label htmlFor="priority" className="block text-sm font-medium text-gray-700 mb-1">
+          Priority
+        </label>
+        <select
+          id="priority"
+          value={priority}
+          onChange={(e) => setPriority(e.target.value as 'high' | 'medium' | 'low')}
+          disabled={loading}
+          className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-black"
+        >
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+
+      {/* Tags Field */}
+      <div>
+        <label htmlFor="tags" className="block text-sm font-medium text-gray-700 mb-1">
+          Tags <span className="text-gray-500 text-xs">(press Enter or comma to add)</span>
+        </label>
+        <div className="flex flex-wrap gap-1.5 mb-1.5">
+          {tags.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200">
+              #{tag}
+              <button
+                type="button"
+                onClick={() => removeTag(tag)}
+                className="text-blue-400 hover:text-blue-600 font-bold leading-none"
+                aria-label={`Remove tag ${tag}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+        <input
+          id="tags"
+          type="text"
+          placeholder="e.g. work, urgent"
+          value={tagInput}
+          onChange={(e) => setTagInput(e.target.value)}
+          onKeyDown={handleTagKeyDown}
+          onBlur={() => { if (tagInput.trim()) addTag(tagInput); }}
+          disabled={loading}
+          className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white !text-black placeholder-gray-400"
+        />
+        <p className="mt-1 text-xs text-gray-500">Letters, numbers, and hyphens only. Max 50 chars each.</p>
+      </div>
+
+      {/* Recurrence Field */}
+      <RecurrenceForm value={recurrenceRule} onChange={setRecurrenceRule} />
 
       {/* Submit Button */}
       <div className="flex justify-end">

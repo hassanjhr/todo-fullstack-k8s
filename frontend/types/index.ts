@@ -41,6 +41,14 @@ export interface Task {
   description?: string | null;
   is_completed: boolean;
   user_id: string; // UUID from backend
+  // Advanced fields (005-advanced-features-dapr-kafka)
+  priority: 'high' | 'medium' | 'low';
+  tags: string[];
+  is_overdue: boolean;
+  due_date?: string | null;
+  recurrence_rule?: string | null;
+  series_id?: string | null;
+  is_paused: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +59,10 @@ export interface Task {
 export interface CreateTaskData {
   title: string;
   description?: string;
+  priority?: 'high' | 'medium' | 'low';
+  tags?: string[];
+  due_date?: string;
+  recurrence_rule?: string;
 }
 
 /**
@@ -60,6 +72,33 @@ export interface UpdateTaskData {
   title?: string;
   description?: string;
   is_completed?: boolean;
+  priority?: 'high' | 'medium' | 'low';
+  tags?: string[];
+  due_date?: string;
+  is_paused?: boolean;
+}
+
+/**
+ * Filters for task list queries
+ */
+export interface TaskFilters {
+  q?: string;
+  priority?: Array<'high' | 'medium' | 'low'>;
+  tags?: string[];
+  status?: 'all' | 'completed' | 'pending' | 'overdue';
+  sort_by?: 'created_at' | 'priority' | 'title' | 'due_date';
+  sort_order?: 'asc' | 'desc';
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * Paginated task list response
+ */
+export interface TaskListResponse {
+  tasks: Task[];
+  next_cursor?: string | null;
+  has_more: boolean;
 }
 
 // ============================================================================

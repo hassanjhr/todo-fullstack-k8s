@@ -75,3 +75,6 @@ Thumbs.db
 
 # Minikube values with secrets
 todo-chatbot/values-local.yaml
+
+# Dapr secrets (never commit real credentials)
+dapr/secrets.json

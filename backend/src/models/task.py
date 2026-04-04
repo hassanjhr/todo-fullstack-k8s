@@ -91,6 +91,40 @@ class Task(SQLModel, table=True):
         description="Last modification timestamp"
     )
 
+    # Advanced Features (005-advanced-features-dapr-kafka)
+    priority: str = Field(
+        default="medium",
+        nullable=False,
+        description="Task priority: high, medium, or low"
+    )
+    due_date: Optional[datetime] = Field(
+        default=None,
+        nullable=True,
+        description="Optional due date and time (UTC)"
+    )
+    recurrence_rule: Optional[str] = Field(
+        default=None,
+        nullable=True,
+        description="RFC 5545 RRULE string for recurring tasks"
+    )
+    series_id: Optional[UUID] = Field(
+        default=None,
+        nullable=True,
+        foreign_key="recurrence_series.id",
+        description="Links task to a recurrence series"
+    )
+    parent_task_id: Optional[UUID] = Field(
+        default=None,
+        nullable=True,
+        foreign_key="tasks.id",
+        description="Self-reference to parent recurring instance"
+    )
+    is_paused: bool = Field(
+        default=False,
+        nullable=False,
+        description="Pauses recurrence spawning without deleting"
+    )
+
     class Config:
         """SQLModel configuration"""
         json_schema_extra = {

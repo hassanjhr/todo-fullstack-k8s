@@ -25,6 +25,11 @@ email-validator>=2.0.0
 # AI Agent
 openai-agents>=0.0.7
 
+# Advanced Features: Recurring Tasks, Reminders, Dapr
+python-dateutil>=2.9
+apscheduler>=3.10
+dapr>=1.13
+
 # Testing
 pytest==8.0.0
 pytest-asyncio==0.23.5
