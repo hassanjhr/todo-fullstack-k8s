@@ -75,10 +75,27 @@ env:
   ENVIRONMENT: "development"
   OPENAI_API_KEY: ""
   OPENAI_MODEL: "gpt-4o"
+  # Dapr / Kafka (only used when dapr.enabled=true)
+  DAPR_ENABLED: "false"
+  DAPR_HTTP_PORT: "3500"
+  DAPR_PUBSUB_NAME: "taskpubsub"
+  REMINDER_POLL_INTERVAL: "300"
 
 # Frontend environment (baked at build time, but can be overridden)
 frontendEnv:
   NEXT_PUBLIC_API_URL: "http://localhost:30800"
+
+# Dapr distributed runtime
+# Minikube: helm upgrade --set dapr.enabled=true (also sets DAPR_ENABLED env)
+# Local:    docker-compose.kafka.yml + dapr run CLI (dapr.enabled=false here)
+dapr:
+  enabled: false
+
+# Kafka broker configuration
+# Minikube (internal K8s service): kafka:9092
+# Local dev (Docker):               localhost:9092
+kafka:
+  brokers: "kafka:9092"
 
 # Service account
 serviceAccount:
