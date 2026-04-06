@@ -82,7 +82,7 @@ export default function DashboardPage() {
     setCreateLoading(true);
     setCreateError(null);
     try {
-      const newTask = await createTask(data);
+      const newTask = await createTask({ ...data, priority: data.priority as "high" | "medium" | "low" | undefined });
       setTasks((prev) => [newTask, ...prev]);
     } catch (err) {
       const errorResult = handleApiError(err);
