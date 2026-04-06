@@ -1,0 +1,73 @@
+# kube-prometheus-stack values for Oracle OKE (Always Free ARM)
+# Install: helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#            -n monitoring --create-namespace -f k8s/monitoring/prometheus-values.yaml
+
+grafana:
+  adminPassword: "change-me-in-production"
+  service:
+    type: LoadBalancer   # OKE provides 1 free LB — use it for Grafana
+  persistence:
+    enabled: false       # No persistent volumes on Always Free tier
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      dapr-system:
+        gnetId: 14746      # Dapr System Dashboard (community)
+        revision: 1
+        datasource: Prometheus
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    storageSpec: {}        # No persistent storage (Always Free)
+    additionalScrapeConfigs:
+      # Scrape Dapr sidecar metrics from all pods with dapr.io/enabled=true
+      - job_name: dapr-sidecars
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_enabled]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            separator: ":"
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: component
+
+alertmanager:
+  alertmanagerSpec:
+    storage: {}            # No persistent storage
+
+# Reduce resource usage for OKE Always Free (limited RAM)
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true

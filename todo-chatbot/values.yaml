@@ -3,6 +3,8 @@
 replicaCount: 1
 
 # Backend (FastAPI)
+# Local/Minikube: repository=todo-backend, pullPolicy=Never
+# OKE (cloud):    repository=ghcr.io/hassanjhr/todo-backend, pullPolicy=Always
 backend:
   image:
     repository: todo-backend
@@ -33,6 +35,8 @@ backend:
     periodSeconds: 10
 
 # Frontend (Next.js)
+# Local/Minikube: repository=todo-frontend, pullPolicy=Never
+# OKE (cloud):    repository=ghcr.io/hassanjhr/todo-frontend, pullPolicy=Always
 frontend:
   image:
     repository: todo-frontend
@@ -90,6 +94,8 @@ frontendEnv:
 # Local:    docker-compose.kafka.yml + dapr run CLI (dapr.enabled=false here)
 dapr:
   enabled: false
+  cronSchedule: "@every 5m"
+  enableMetrics: true
 
 # Kafka broker configuration
 # Minikube (internal K8s service): kafka:9092

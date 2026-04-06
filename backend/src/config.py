@@ -62,10 +62,12 @@ class Settings(BaseSettings):
     # Environment (Optional)
     ENVIRONMENT: str = "development"
 
-    # Dapr Configuration (005-advanced-features-dapr-kafka)
+    # Dapr Configuration (005-advanced-features-dapr-kafka + 006-full-dapr-oracle-deploy)
     DAPR_ENABLED: bool = False
     DAPR_HTTP_PORT: int = 3500
     DAPR_PUBSUB_NAME: str = "taskpubsub"
+    DAPR_STATE_STORE_NAME: str = "statestore"
+    DAPR_SECRETS_STORE_NAME: str = "k8ssecrets"
     REMINDER_POLL_INTERVAL: int = 300
     KAFKA_BROKERS: str = "localhost:9092"
 

@@ -239,7 +239,7 @@ async def root():
 # ============================================================================
 
 # Import authentication, task, and chat routes
-from src.api.routes import auth_router, tasks_router, chat_router, tags_router, reminders_router
+from src.api.routes import auth_router, tasks_router, chat_router, tags_router, reminders_router, dapr_bindings_router
 
 # Register authentication routes
 # Security: Auth endpoints do NOT require JWT authentication (they issue tokens)
@@ -287,6 +287,16 @@ app.include_router(
 )
 
 logger.info("Reminders routes registered at /api")
+
+# Register Dapr binding routes (006-full-dapr-oracle-deploy)
+# No prefix — Dapr calls /reminder-cron directly at root path
+app.include_router(
+    dapr_bindings_router,
+    prefix="",
+    tags=["Dapr Bindings"]
+)
+
+logger.info("Dapr binding routes registered at / (cron: POST /reminder-cron)")
 
 
 # ============================================================================

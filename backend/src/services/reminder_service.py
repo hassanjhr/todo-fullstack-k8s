@@ -105,3 +105,48 @@ def stop_scheduler() -> None:
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
         logger.info("Reminder scheduler stopped")
+
+
+async def check_due_reminders_async(session) -> None:
+    """
+    Async version of check_due_reminders for use by the Dapr cron binding handler.
+    Idempotent: checks reminder.status == 'pending' before processing to prevent
+    duplicate sends when both the cron binding and the legacy poll scheduler run.
+    """
+    from src.services.event_publisher import publish_reminder_event
+    from src.models.reminder import Reminder
+    from src.models.task import Task
+    from sqlmodel import select
+
+    now = datetime.utcnow()
+
+    stmt = (
+        select(Reminder, Task.title)
+        .join(Task, Task.id == Reminder.task_id)
+        .where(
+            Reminder.status == "pending",
+            Reminder.trigger_at <= now,
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    if not rows:
+        logger.info("check_due_reminders_async: no pending reminders due")
+        return
+
+    for reminder, task_title in rows:
+        try:
+            publish_reminder_event(
+                task_id=str(reminder.task_id),
+                user_id=str(reminder.user_id),
+                task_title=task_title or "",
+                trigger_at=reminder.trigger_at,
+            )
+            reminder.status = "sent"
+            session.add(reminder)
+            logger.info(f"Reminder {reminder.id} processed for task {reminder.task_id}")
+        except Exception as exc:
+            logger.error(f"Failed to process reminder {reminder.id}: {exc}")
+
+    await session.commit()

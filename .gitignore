@@ -78,3 +78,9 @@ todo-chatbot/values-local.yaml
 
 # Dapr secrets (never commit real credentials)
 dapr/secrets.json
+
+# Kubernetes credentials (never commit kubeconfig files)
+kubeconfig.yaml
+*.kubeconfig
+k8s/oke/kubeconfig*
+.kube/

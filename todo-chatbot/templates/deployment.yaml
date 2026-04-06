@@ -16,10 +16,21 @@ spec:
       app.kubernetes.io/component: backend
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
+        {{- if .Values.dapr.enabled }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "todo-backend"
+        dapr.io/app-port: "8000"
+        dapr.io/dapr-http-port: "3500"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        {{- end }}
       labels:
         {{- include "todo-chatbot.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: backend
@@ -90,10 +101,20 @@ spec:
       app.kubernetes.io/component: frontend
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
+        {{- if .Values.dapr.enabled }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "todo-frontend"
+        dapr.io/app-port: "3000"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9091"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+        {{- end }}
       labels:
         {{- include "todo-chatbot.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: frontend

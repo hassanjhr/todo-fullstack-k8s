@@ -17,12 +17,12 @@
 
 **Purpose**: Create new directories, local Dapr component files, and configuration scaffolding before Helm chart work begins.
 
-- [ ] T001 Create `k8s/monitoring/` directory and `.gitkeep` placeholder
-- [ ] T002 [P] Create `dapr/components/statestore.yaml` — local Redis state store component (host: localhost:6379, type: state.redis v1)
-- [ ] T003 [P] Create `dapr/components/reminder-cron.yaml` — local cron binding component (type: bindings.cron v1, schedule: "@every 5m")
-- [ ] T004 [P] Create `dapr/components-docker/statestore.yaml` — Docker-internal Redis state store (host: redis:6379)
-- [ ] T005 [P] Create `dapr/components-docker/reminder-cron.yaml` — Docker cron binding (same schedule as local)
-- [ ] T006 Update `backend/.env.example` — add DAPR_ENABLED, DAPR_HTTP_PORT, DAPR_PUBSUB_NAME, DAPR_STATE_STORE_NAME, REMINDER_POLL_INTERVAL
+- [X] T001 Create `k8s/monitoring/` directory and `.gitkeep` placeholder
+- [X] T002 [P] Create `dapr/components/statestore.yaml` — local Redis state store component (host: localhost:6379, type: state.redis v1)
+- [X] T003 [P] Create `dapr/components/reminder-cron.yaml` — local cron binding component (type: bindings.cron v1, schedule: "@every 5m")
+- [X] T004 [P] Create `dapr/components-docker/statestore.yaml` — Docker-internal Redis state store (host: redis:6379)
+- [X] T005 [P] Create `dapr/components-docker/reminder-cron.yaml` — Docker cron binding (same schedule as local)
+- [X] T006 Update `backend/.env.example` — add DAPR_ENABLED, DAPR_HTTP_PORT, DAPR_PUBSUB_NAME, DAPR_STATE_STORE_NAME, REMINDER_POLL_INTERVAL
 
 **Checkpoint**: Local Dapr component files ready; directory structure in place.
 
@@ -34,19 +34,19 @@
 
 ⚠️ **CRITICAL**: No user story can be fully tested until this phase is complete.
 
-- [ ] T007 Create `backend/src/api/routes/dapr_bindings.py` — FastAPI router with `POST /reminder-cron` endpoint that calls `process_due_reminders(db)` from `reminder_service.py`
-- [ ] T008 Update `backend/src/main.py` — import and register `dapr_bindings.router` with prefix `""` (no prefix, Dapr binding calls root path `/reminder-cron`)
-- [ ] T009 Update `backend/src/config.py` — add `DAPR_STATE_STORE_NAME: str = "statestore"` and `DAPR_SECRETS_STORE_NAME: str = "k8ssecrets"` to Settings class
-- [ ] T010 Update `todo-chatbot/templates/dapr-components.yaml` — add statestore component (type: state.redis, redisHost: redis-master:6379, actorStateStore: true, scopes: [todo-backend])
-- [ ] T011 Update `todo-chatbot/templates/dapr-components.yaml` — add reminder-cron binding component (type: bindings.cron, schedule from `.Values.dapr.cronSchedule`, scopes: [todo-backend])
-- [ ] T012 Update `todo-chatbot/templates/dapr-components.yaml` — add scopes: [todo-backend] to existing `taskpubsub` and `k8ssecrets` components
-- [ ] T013 Update `todo-chatbot/templates/deployment.yaml` — add Dapr sidecar annotations to frontend pod template: `dapr.io/enabled`, `dapr.io/app-id: "todo-frontend"`, `dapr.io/app-port: "3000"`, `dapr.io/metrics-port: "9091"` (conditional on `.Values.dapr.enabled`)
-- [ ] T014 Update `todo-chatbot/templates/deployment.yaml` — add `dapr.io/enable-metrics: "true"` and `dapr.io/metrics-port: "9090"` to backend pod annotations (conditional on `.Values.dapr.enabled`)
-- [ ] T015 Update `todo-chatbot/values.yaml` — add `dapr.cronSchedule: "@every 5m"` and `dapr.enableMetrics: true` fields under existing `dapr:` block
-- [ ] T016 Create `frontend/lib/api/dapr-client.ts` — utility that returns base API URL: if `NEXT_PUBLIC_DAPR_ENABLED=true` returns `http://localhost:3500/v1.0/invoke/todo-backend/method`, else returns `NEXT_PUBLIC_API_URL`
-- [ ] T017 Update `frontend/lib/api/tasks.ts`, `reminders.ts`, `tags.ts` — replace hardcoded `process.env.NEXT_PUBLIC_API_URL` with `getApiBaseUrl()` from `dapr-client.ts`
-- [ ] T018 [P] Update `frontend/.env.local` — add `NEXT_PUBLIC_DAPR_ENABLED=false` (local dev default) and `NEXT_PUBLIC_DAPR_SIDECAR_URL=http://localhost:3500`
-- [ ] T019 [P] Update `frontend/.env.example` — same new vars as T018
+- [X] T007 Create `backend/src/api/routes/dapr_bindings.py` — FastAPI router with `POST /reminder-cron` endpoint that calls `process_due_reminders(db)` from `reminder_service.py`
+- [X] T008 Update `backend/src/main.py` — import and register `dapr_bindings.router` with prefix `""` (no prefix, Dapr binding calls root path `/reminder-cron`)
+- [X] T009 Update `backend/src/config.py` — add `DAPR_STATE_STORE_NAME: str = "statestore"` and `DAPR_SECRETS_STORE_NAME: str = "k8ssecrets"` to Settings class
+- [X] T010 Update `todo-chatbot/templates/dapr-components.yaml` — add statestore component (type: state.redis, redisHost: redis-master:6379, actorStateStore: true, scopes: [todo-backend])
+- [X] T011 Update `todo-chatbot/templates/dapr-components.yaml` — add reminder-cron binding component (type: bindings.cron, schedule from `.Values.dapr.cronSchedule`, scopes: [todo-backend])
+- [X] T012 Update `todo-chatbot/templates/dapr-components.yaml` — add scopes: [todo-backend] to existing `taskpubsub` and `k8ssecrets` components
+- [X] T013 Update `todo-chatbot/templates/deployment.yaml` — add Dapr sidecar annotations to frontend pod template: `dapr.io/enabled`, `dapr.io/app-id: "todo-frontend"`, `dapr.io/app-port: "3000"`, `dapr.io/metrics-port: "9091"` (conditional on `.Values.dapr.enabled`)
+- [X] T014 Update `todo-chatbot/templates/deployment.yaml` — add `dapr.io/enable-metrics: "true"` and `dapr.io/metrics-port: "9090"` to backend pod annotations (conditional on `.Values.dapr.enabled`)
+- [X] T015 Update `todo-chatbot/values.yaml` — add `dapr.cronSchedule: "@every 5m"` and `dapr.enableMetrics: true` fields under existing `dapr:` block
+- [X] T016 Create `frontend/lib/api/dapr-client.ts` — utility that returns base API URL: if `NEXT_PUBLIC_DAPR_ENABLED=true` returns `http://localhost:3500/v1.0/invoke/todo-backend/method`, else returns `NEXT_PUBLIC_API_URL`
+- [X] T017 Update `frontend/lib/api/tasks.ts`, `reminders.ts`, `tags.ts` — replace hardcoded `process.env.NEXT_PUBLIC_API_URL` with `getApiBaseUrl()` from `dapr-client.ts`
+- [X] T018 [P] Update `frontend/.env.local` — add `NEXT_PUBLIC_DAPR_ENABLED=false` (local dev default) and `NEXT_PUBLIC_DAPR_SIDECAR_URL=http://localhost:3500`
+- [X] T019 [P] Update `frontend/.env.example` — same new vars as T018
 
 **Checkpoint**: Backend handles `/reminder-cron`, Helm chart has all 5 Dapr components, frontend API calls are Dapr-aware. Foundation ready for all user stories.
 
@@ -61,7 +61,7 @@
 ### Implementation
 
 - [ ] T020 [US1] Verify `todo-chatbot/templates/kafka.yaml` — confirm healthcheck uses `kafka-topics --bootstrap-server localhost:9092 --list` (already correct; confirm no ARM incompatibility)
-- [ ] T021 [US1] Update `todo-chatbot/templates/service.yaml` — ensure `NodePort` is default, add `type: {{ .Values.backend.service.type | default "NodePort" }}` and same for frontend (needed for US2 LoadBalancer toggle)
+- [X] T021 [US1] Update `todo-chatbot/templates/service.yaml` — ensure `NodePort` is default, add `type: {{ .Values.backend.service.type | default "NodePort" }}` and same for frontend (needed for US2 LoadBalancer toggle)
 - [ ] T022 [US1] Create `specs/006-full-dapr-oracle-deploy/minikube-verify.sh` — bash script that runs all Minikube verification steps: `kubectl get components`, `kubectl get pods`, task creation curl, Kafka topic check
 - [ ] T023 [US1] Update `specs/006-full-dapr-oracle-deploy/quickstart.md` — add exact `dapr init --kubernetes` output expectations and verification commands for all 5 building blocks
 - [ ] T024 [US1] Update `todo-chatbot/values.yaml` — add `backend.service.type: NodePort` and `frontend.service.type: NodePort` as explicit defaults (enables clean override for OKE in US2)
@@ -79,14 +79,14 @@
 
 ### Implementation
 
-- [ ] T026 [US2] Update `todo-chatbot/values.yaml` — add `frontend.service.type: NodePort` default, add OKE override comment block: `# OKE: --set frontend.service.type=LoadBalancer`
-- [ ] T027 [US2] Update `todo-chatbot/templates/service.yaml` — frontend service type uses `.Values.frontend.service.type | default "NodePort"` (from T021, ensure applied to both backend and frontend services)
-- [ ] T028 [P] [US2] Update `todo-chatbot/values.yaml` — add GHCR image repo fields: `backend.image.repository: ghcr.io/hassanjhr/todo-backend` and `frontend.image.repository: ghcr.io/hassanjhr/todo-frontend` with `pullPolicy: Always` for cloud deployments
-- [ ] T029 [P] [US2] Verify `backend/Dockerfile` — confirm multi-stage build, non-root user (`USER nobody`), and produces a working image. Add `--platform=linux/arm64` comment for OKE ARM builds.
-- [ ] T030 [P] [US2] Verify `frontend/Dockerfile` — confirm Next.js standalone output (`output: 'standalone'` in `next.config.js`), non-root user, ARM64 compatible base image (`node:20-alpine`).
-- [ ] T031 [US2] Create `k8s/oke/README.md` — step-by-step OKE cluster provisioning guide: OCI Console → OKE Quick Create → ARM Ampere A1.Flex shape → download kubeconfig → configure kubectl
-- [ ] T032 [US2] Create `k8s/oke/create-secrets.sh` — helper script: `kubectl create secret generic todo-backend-secrets --from-literal=...` for JWT, DB URL, Kafka brokers on OKE
-- [ ] T033 [US2] Update `todo-chatbot/templates/dapr-components.yaml` — update `k8ssecrets` component: add `namespace: {{ .Release.Namespace }}` to ensure it reads from app namespace, not dapr-system
+- [X] T026 [US2] Update `todo-chatbot/values.yaml` — add `frontend.service.type: NodePort` default, add OKE override comment block: `# OKE: --set frontend.service.type=LoadBalancer`
+- [X] T027 [US2] Update `todo-chatbot/templates/service.yaml` — frontend service type uses `.Values.frontend.service.type | default "NodePort"` (from T021, ensure applied to both backend and frontend services)
+- [X] T028 [P] [US2] Update `todo-chatbot/values.yaml` — add GHCR image repo fields: `backend.image.repository: ghcr.io/hassanjhr/todo-backend` and `frontend.image.repository: ghcr.io/hassanjhr/todo-frontend` with `pullPolicy: Always` for cloud deployments
+- [X] T029 [P] [US2] Verify `backend/Dockerfile` — confirm multi-stage build, non-root user (`USER nobody`), and produces a working image. Add `--platform=linux/arm64` comment for OKE ARM builds.
+- [X] T030 [P] [US2] Verify `frontend/Dockerfile` — confirm Next.js standalone output (`output: 'standalone'` in `next.config.js`), non-root user, ARM64 compatible base image (`node:20-alpine`).
+- [X] T031 [US2] Create `k8s/oke/README.md` — step-by-step OKE cluster provisioning guide: OCI Console → OKE Quick Create → ARM Ampere A1.Flex shape → download kubeconfig → configure kubectl
+- [X] T032 [US2] Create `k8s/oke/create-secrets.sh` — helper script: `kubectl create secret generic todo-backend-secrets --from-literal=...` for JWT, DB URL, Kafka brokers on OKE
+- [X] T033 [US2] Update `todo-chatbot/templates/dapr-components.yaml` — update `k8ssecrets` component: add `namespace: {{ .Release.Namespace }}` to ensure it reads from app namespace, not dapr-system
 
 **Checkpoint**: Running `helm upgrade --set dapr.enabled=true --set frontend.service.type=LoadBalancer --set backend.image.repository=ghcr.io/hassanjhr/todo-backend` on OKE deploys full stack with public LoadBalancer IP.
 
@@ -100,10 +100,10 @@
 
 ### Implementation
 
-- [ ] T034 [US3] Create `.github/workflows/deploy.yml` — full pipeline: trigger on push to main; Job 1 (build-and-push): checkout, docker/login-action (GHCR), docker/build-push-action for backend and frontend with `latest` + `sha` tags; Job 2 (deploy, needs: build-and-push): setup kubectl from `OKE_KUBECONFIG` secret, install Dapr CLI, `dapr init --kubernetes --wait || dapr upgrade --kubernetes --wait`, `helm upgrade --install` with all `--set` overrides, `kubectl rollout status`
-- [ ] T035 [US3] Update `.github/workflows/deploy.yml` — add `permissions: contents: read, packages: write` to build job for GHCR push authorization
-- [ ] T036 [US3] Create `.github/workflows/deploy.yml` — add environment protection: deploy job runs only on `main` branch; add `if: github.ref == 'refs/heads/main'` guard
-- [ ] T037 [P] [US3] Create `.github/workflows/ci.yml` — lightweight CI-only workflow: trigger on PRs; runs `pytest` for backend and `npm run build` for frontend; does NOT deploy; blocks merge on failure
+- [X] T034 [US3] Create `.github/workflows/deploy.yml` — full pipeline: trigger on push to main; Job 1 (build-and-push): checkout, docker/login-action (GHCR), docker/build-push-action for backend and frontend with `latest` + `sha` tags; Job 2 (deploy, needs: build-and-push): setup kubectl from `OKE_KUBECONFIG` secret, install Dapr CLI, `dapr init --kubernetes --wait || dapr upgrade --kubernetes --wait`, `helm upgrade --install` with all `--set` overrides, `kubectl rollout status`
+- [X] T035 [US3] Update `.github/workflows/deploy.yml` — add `permissions: contents: read, packages: write` to build job for GHCR push authorization
+- [X] T036 [US3] Create `.github/workflows/deploy.yml` — add environment protection: deploy job runs only on `main` branch; add `if: github.ref == 'refs/heads/main'` guard
+- [X] T037 [P] [US3] Create `.github/workflows/ci.yml` — lightweight CI-only workflow: trigger on PRs; runs `pytest` for backend and `npm run build` for frontend; does NOT deploy; blocks merge on failure
 - [ ] T038 [P] [US3] Create `backend/tests/test_dapr_bindings.py` — unit test for `/reminder-cron` endpoint: mock `process_due_reminders`, assert 200 response
 - [ ] T039 [US3] Create `docs/github-secrets.md` — document all required GitHub Secrets: `OKE_KUBECONFIG` (base64 kubeconfig), `DATABASE_URL`, `JWT_SECRET_KEY`, `OPENAI_API_KEY` with description and how to set each
 - [ ] T040 [US3] Update `README.md` root — add CI/CD section: how to set up GitHub Secrets, how the pipeline works, how to monitor deployments in GitHub Actions UI
@@ -120,10 +120,10 @@
 
 ### Implementation
 
-- [ ] T041 [US4] Create `k8s/monitoring/prometheus-values.yaml` — kube-prometheus-stack Helm values: Grafana admin password placeholder, Grafana service type LoadBalancer, Prometheus additionalScrapeConfigs for Dapr sidecar metrics (port 9090), retention 7d, persistent storage disabled (Always Free — no block volume)
-- [ ] T042 [US4] Create `k8s/monitoring/README.md` — install instructions: `helm repo add prometheus-community`, `helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace -f k8s/monitoring/prometheus-values.yaml`; Grafana access; import dashboard ID 14746
-- [ ] T043 [US4] Update `todo-chatbot/templates/deployment.yaml` — add `prometheus.io/scrape: "true"`, `prometheus.io/port: "9090"`, `prometheus.io/path: "/metrics"` pod annotations to backend when `dapr.enabled=true` (enables Prometheus auto-discovery)
-- [ ] T044 [US4] Update `todo-chatbot/templates/deployment.yaml` — same Prometheus annotations for frontend pod (metrics port 9091) when `dapr.enabled=true`
+- [X] T041 [US4] Create `k8s/monitoring/prometheus-values.yaml` — kube-prometheus-stack Helm values: Grafana admin password placeholder, Grafana service type LoadBalancer, Prometheus additionalScrapeConfigs for Dapr sidecar metrics (port 9090), retention 7d, persistent storage disabled (Always Free — no block volume)
+- [X] T042 [US4] Create `k8s/monitoring/README.md` — install instructions: `helm repo add prometheus-community`, `helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace -f k8s/monitoring/prometheus-values.yaml`; Grafana access; import dashboard ID 14746
+- [X] T043 [US4] Update `todo-chatbot/templates/deployment.yaml` — add `prometheus.io/scrape: "true"`, `prometheus.io/port: "9090"`, `prometheus.io/path: "/metrics"` pod annotations to backend when `dapr.enabled=true` (enables Prometheus auto-discovery)
+- [X] T044 [US4] Update `todo-chatbot/templates/deployment.yaml` — same Prometheus annotations for frontend pod (metrics port 9091) when `dapr.enabled=true`
 - [ ] T045 [US4] Create `k8s/monitoring/alerts/pod-restart-alert.yaml` — PrometheusRule manifest: alert fires when pod restart count > 3 in 10 minutes; severity: warning
 - [ ] T046 [US4] Update `specs/006-full-dapr-oracle-deploy/quickstart.md` — add Monitoring section: install commands, port-forward command, Grafana dashboard import steps, expected metrics visible
 
@@ -133,11 +133,11 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T047 [P] Update root `README.md` — add feature 006 section: Part B Minikube steps, Part C Oracle OKE steps, CI/CD setup, monitoring setup
-- [ ] T048 [P] Update `backend/src/services/reminder_service.py` — make `process_due_reminders` idempotent: check `reminder.is_sent` flag before processing to prevent duplicate sends when cron fires and legacy poll both run
-- [ ] T049 [P] Update `backend/src/api/routes/__init__.py` — verify `dapr_bindings` router is exported correctly
+- [X] T047 [P] Update root `README.md` — add feature 006 section: Part B Minikube steps, Part C Oracle OKE steps, CI/CD setup, monitoring setup
+- [X] T048 [P] Update `backend/src/services/reminder_service.py` — make `process_due_reminders` idempotent: check `reminder.is_sent` flag before processing to prevent duplicate sends when cron fires and legacy poll both run
+- [X] T049 [P] Update `backend/src/api/routes/__init__.py` — verify `dapr_bindings` router is exported correctly
 - [ ] T050 [P] Update `docker-compose.local.yml` — add `redis` service (port 6379) so Dapr state store works in full local Docker stack (matches `dapr/components-docker/statestore.yaml`)
-- [ ] T051 Update `.gitignore` — add `kubeconfig.yaml`, `*.kubeconfig`, `k8s/oke/kubeconfig*` to prevent accidental credential commits
+- [X] T051 Update `.gitignore` — add `kubeconfig.yaml`, `*.kubeconfig`, `k8s/oke/kubeconfig*` to prevent accidental credential commits
 - [ ] T052 Update `todo-chatbot/Chart.yaml` — bump `appVersion` to `006` and `version` to `0.6.0`
 - [ ] T053 [P] Create `specs/006-full-dapr-oracle-deploy/e2e-checklist.md` — end-to-end verification checklist: all 9 items from quickstart.md verification section, formatted as checkboxes
 - [ ] T054 Run full Minikube deployment verification: `kubectl get components` (5 components), `kubectl get pods` (2/2), create task via frontend → verify Kafka topic, wait 5 min → verify `/reminder-cron` called in backend logs

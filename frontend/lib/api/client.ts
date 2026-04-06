@@ -197,14 +197,22 @@ import { getEnvVar, HttpMethod, HttpStatus } from '@/types';
 import { createApiError, logError } from '@/lib/utils/errors';
 
 /**
- * Get API base URL from environment
- * Lazy-loaded to avoid initialization errors
+ * Get API base URL from environment.
+ * When NEXT_PUBLIC_DAPR_ENABLED=true (K8s with Dapr sidecar), routes all
+ * backend calls through the local Dapr sidecar using Service Invocation.
+ * This enforces mTLS and Dapr-managed retries automatically.
+ * When false (local dev, Docker), calls backend directly via NEXT_PUBLIC_API_URL.
  */
 function getApiBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_DAPR_ENABLED === 'true') {
+    const sidecar = process.env.NEXT_PUBLIC_DAPR_SIDECAR_URL || 'http://localhost:3500';
+    const appId = process.env.NEXT_PUBLIC_BACKEND_APP_ID || 'todo-backend';
+    return `${sidecar}/v1.0/invoke/${appId}/method`;
+  }
   const url = process.env.NEXT_PUBLIC_API_URL;
   if (!url) {
     console.error('NEXT_PUBLIC_API_URL is not defined, using fallback');
-    return 'http://localhost:8001'; // Fallback for development
+    return 'http://localhost:8000';
   }
   return url;
 }
