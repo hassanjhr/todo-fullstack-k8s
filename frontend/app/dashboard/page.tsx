@@ -78,11 +78,11 @@ export default function DashboardPage() {
     setFilters({ ...newFilters, cursor: undefined });
   };
 
-  const handleCreateTask = async (data: { title: string; description?: string; priority: string; tags: string[] }) => {
+  const handleCreateTask = async (data: { title: string; description?: string; priority?: 'high' | 'medium' | 'low'; tags?: string[]; due_date?: string }) => {
     setCreateLoading(true);
     setCreateError(null);
     try {
-      const newTask = await createTask({ ...data, priority: data.priority as "high" | "medium" | "low" | undefined });
+      const newTask = await createTask(data);
       setTasks((prev) => [newTask, ...prev]);
     } catch (err) {
       const errorResult = handleApiError(err);

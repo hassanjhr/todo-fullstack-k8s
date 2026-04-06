@@ -155,6 +155,9 @@ export interface SigninFormData {
 export interface TaskFormData {
   title: string;
   description?: string;
+  priority?: 'high' | 'medium' | 'low';
+  tags?: string[];
+  due_date?: string;
 }
 
 // ============================================================================
