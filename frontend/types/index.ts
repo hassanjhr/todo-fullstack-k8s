@@ -51,6 +51,7 @@ export interface Task {
   is_paused: boolean;
   created_at: string;
   updated_at: string;
+  reminders?: import('@/types/reminder').Reminder[];
 }
 
 /**
@@ -158,6 +159,7 @@ export interface TaskFormData {
   priority?: 'high' | 'medium' | 'low';
   tags?: string[];
   due_date?: string;
+  recurrence_rule?: string;
 }
 
 // ============================================================================
